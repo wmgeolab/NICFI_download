@@ -5,12 +5,17 @@ from shapely.geometry import shape
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import logging
+import json
+
+TEST_MODE = False
+TEST_MOSAIC_NAME = "planet_medres_normalized_analytic_2020-11_mosaic"
 
 # Paths and parameters
 API_KEY_PATH = "/sciclone/geograd/.keys/NICFI_planet.key"
 LOG_DIR = "/sciclone/geograd/satellite_data/NICFI/LOGS"
 OUTPUT_DIR = "/sciclone/geograd/satellite_data/NICFI/MX_TX_SOUTHERN_US_BORDER"
 GEOJSON_PATH = "/sciclone/geograd/satellite_data/NICFI/NICFI_download/region.geojson"
+CACHE_FILE = os.path.join(LOG_DIR, "quad_cache.json")
 NICFI_URL = "https://api.planet.com/basemaps/v1/mosaics"
 
 # Load Planet API key
@@ -23,57 +28,106 @@ log_file = os.path.join(LOG_DIR, "nicfi_download.log")
 logging.basicConfig(
     filename=log_file,
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(processName)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Load or initialize cache
+if os.path.exists(CACHE_FILE):
+    with open(CACHE_FILE, "r") as cache_file:
+        quad_cache = json.load(cache_file)
+else:
+    quad_cache = {}
+
+# Function to save cache
+def save_cache():
+    with open(CACHE_FILE, "w") as cache_file:
+        json.dump(quad_cache, cache_file)
+
 # Function to fetch NICFI mosaics metadata
 def fetch_nicfi_mosaics():
     headers = {"Authorization": f"api-key {PLANET_API_KEY}"}
-    response = requests.get(NICFI_URL, headers=headers)
-    response.raise_for_status()
-    mosaics = response.json()["mosaics"]
-    return [mosaic for mosaic in mosaics if mosaic["name"].startswith("nicfi")]
+    mosaics = []
+    next_page_url = NICFI_URL
 
-# Function to fetch quad download links
-def fetch_quad_links(mosaic_id, geojson_geometry):
+    try:
+        while next_page_url:
+            response = requests.get(next_page_url, headers=headers)
+            response.raise_for_status()
+            response_json = response.json()
+
+            mosaics += [mosaic for mosaic in response_json.get("mosaics", [])
+                        if mosaic["name"].startswith("planet_medres_normalized")]
+
+            next_page_url = response_json["_links"].get("_next")
+
+        logger.info(f"Total mosaics found: {len(mosaics)}")
+        return mosaics
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch mosaics: {e}")
+        raise
+
+# Function to fetch quad download links with caching
+def fetch_quad_links(mosaic_id, bbox):
     headers = {"Authorization": f"api-key {PLANET_API_KEY}"}
     quads_url = f"{NICFI_URL}/{mosaic_id}/quads"
-    params = {
-        "intersects": geojson_geometry
-    }
-    response = requests.get(quads_url, headers=headers, params=params)
-    response.raise_for_status()
-    return response.json()["quads"]
+    bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}"
+    logger.info(f"Requesting quads for mosaic {mosaic_id} with bbox: {bbox_str}")
+
+    params = {"bbox": bbox_str, "_page_size": 50}
+    all_quads = quad_cache.get(mosaic_id, [])
+
+    try:
+        while quads_url:
+            response = requests.get(quads_url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            for quad in data.get("items", []):
+                download_url = quad["_links"].get("download")
+                if download_url and download_url not in all_quads:
+                    all_quads.append(download_url)
+
+            quads_url = data["_links"].get("_next", None)
+            params = None
+
+        quad_cache[mosaic_id] = all_quads
+        save_cache()
+
+        logger.info(f"Total quads found for mosaic {mosaic_id}: {len(all_quads)}")
+        return all_quads
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to fetch quads for mosaic {mosaic_id}: {e}")
+        raise
 
 # Function to download a single quad
-def download_quad(quad, output_dir):
-    download_url = quad["_links"]["download"]
-    quad_name = quad["id"]
+def download_quad(download_url, output_dir):
+    quad_name = download_url.split("/")[-2]
     filepath = os.path.join(output_dir, f"{quad_name}.tif")
-    if not os.path.exists(filepath):
-        try:
-            response = requests.get(download_url, stream=True)
-            response.raise_for_status()
-            with open(filepath, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024):
-                    f.write(chunk)
-            logger.info(f"Downloaded: {filepath}")
-        except Exception as e:
-            logger.error(f"Failed to download {quad_name}: {e}")
-    else:
+    if os.path.exists(filepath):
         logger.info(f"Already downloaded: {filepath}")
+        return
+
+    try:
+        response = requests.get(download_url, stream=True)
+        response.raise_for_status()
+        with open(filepath, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024):
+                f.write(chunk)
+        logger.info(f"Downloaded: {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to download {quad_name}: {e}")
 
 # Parallel downloading with progress bar
 def download_all_quads(quads, output_dir):
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = []
         with tqdm(total=len(quads)) as pbar:
-            for quad in quads:
-                future = executor.submit(download_quad, quad, output_dir)
+            for quad_url in quads:
+                future = executor.submit(download_quad, quad_url, output_dir)
                 future.add_done_callback(lambda _: pbar.update())
                 futures.append(future)
             for future in futures:
@@ -81,24 +135,28 @@ def download_all_quads(quads, output_dir):
 
 # Main process
 def download_nicfi_tiles():
-    # Load GeoJSON geometry
-    gdf = gpd.read_file(GEOJSON_PATH)
-    geojson_geometry = gdf.geometry.unary_union.__geo_interface__
+    gdf = gpd.read_file(GEOJSON_PATH, engine="pyogrio")
+    geojson_geometry = gdf.geometry.unary_union
+    bbox = geojson_geometry.bounds
 
-    # Fetch NICFI mosaics
+    logger.info(f"Computed bounding box: {bbox}")
     mosaics = fetch_nicfi_mosaics()
     logger.info(f"Found {len(mosaics)} NICFI mosaics.")
 
-    #For testing
-    mosaics = mosaics[0:4]
-
-    # Iterate over mosaics and download tiles
     for mosaic in mosaics:
         mosaic_id = mosaic["id"]
-        logger.info(f"Processing mosaic: {mosaic['name']}")
-        quads = fetch_quad_links(mosaic_id, geojson_geometry)
-        logger.info(f"Found {len(quads)} quads for mosaic {mosaic['name']}")
-        download_all_quads(quads, OUTPUT_DIR)
+        mosaic_name = mosaic["name"]
+
+        if TEST_MODE and mosaic_name != TEST_MOSAIC_NAME:
+            continue
+
+        logger.info(f"Processing mosaic: {mosaic_name}")
+        try:
+            quads = fetch_quad_links(mosaic_id, bbox)
+            logger.info(f"Found {len(quads)} quads for mosaic {mosaic_name}")
+            download_all_quads(quads, OUTPUT_DIR)
+        except Exception as e:
+            logger.error(f"Failed to process mosaic {mosaic_name}: {e}")
 
 if __name__ == "__main__":
     try:

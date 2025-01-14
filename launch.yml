@@ -10,6 +10,7 @@ spec:
   containers:
     - name: nicfi-downloader-container
       image: ghcr.io/wmgeolab/nicfi-download:latest # Replace with the actual image name
+      imagePullPolicy: Always
       command: ["/bin/sh", "-c"]
       args:
         - |
