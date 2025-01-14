@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: nicfi-downloader-container
-          image: ghcr.io/wmgeolab/NICFI-download:latest # Replace with the actual image name
+          image: ghcr.io/wmgeolab/nicfi-download:latest # Replace with the actual image name
           command: ["/bin/sh", "-c"]
           args:
             - |
