@@ -1,9 +1,8 @@
 name: NICFI download image build
 run-name: NICFI download image build
 on:
-  push:
-    branches: ['main']
-    paths: ['NICFI_download/image/**']
+  # Add manual trigger event
+  workflow_dispatch
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
