@@ -1,41 +1,37 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: Pod
 metadata:
-  name: nicfi-download-job
-  namespace: geoboundaries
+  name: nicfi-dl
 spec:
-  ttlSecondsAfterFinished: 60  # Auto-delete job after 60 seconds
-  backoffLimit: 0  # Do not retry the job on failure
-  template:
-    spec:
-      securityContext:
-        runAsUser: 71032    # User ID for accessing NFS
-        runAsGroup: 9915    # Group ID for accessing NFS
-      restartPolicy: Never
-      containers:
-        - name: nicfi-downloader-container
-          image: ghcr.io/wmgeolab/nicfi-download:latest # Replace with the actual image name
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              # Ensure required directories are set up
-              export OUTPUT_DIR=/sciclone/geograd/satellite_data/NICFI/MX_TX_SOUTHERN_US_BORDER
-              export LOG_DIR=/sciclone/geograd/satellite_data/NICFI/LOGS
+  securityContext:
+    runAsUser: 71032    # User ID for accessing NFS
+    runAsGroup: 9915    # Group ID for accessing NFS
+  restartPolicy: Never
+  containers:
+    - name: nicfi-downloader-container
+      image: ghcr.io/wmgeolab/nicfi-download:latest # Replace with the actual image name
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Ensure required directories are set up
+          export OUTPUT_DIR=/sciclone/geograd/satellite_data/NICFI/MX_TX_SOUTHERN_US_BORDER
+          export LOG_DIR=/sciclone/geograd/satellite_data/NICFI/LOGS
 
-              # Run the NICFI Python script
-              python /sciclone/geograd/satellite_data/NICFI/NICFI_download/download.py
-          volumeMounts:
-            - name: nfs-mount
-              mountPath: /sciclone
-          resources:
-            requests:
-              memory: "16Gi"
-              cpu: "2"
-            limits:
-              memory: "16Gi"
-              cpu: "2"
-      volumes:
+          # Run the NICFI Python script
+          python /sciclone/geograd/satellite_data/NICFI/NICFI_download/download.py
+          sleep 999999
+      volumeMounts:
         - name: nfs-mount
-          nfs:
-            server: 128.239.59.144
-            path: /sciclone
+          mountPath: /sciclone
+      resources:
+        requests:
+          memory: "64Gi"
+          cpu: "6"
+        limits:
+          memory: "64Gi"
+          cpu: "6"
+  volumes:
+    - name: nfs-mount
+      nfs:
+        server: 128.239.59.144
+        path: /sciclone
