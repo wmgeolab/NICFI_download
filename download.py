@@ -81,23 +81,35 @@ def fetch_quad_links(mosaic_id, bbox):
     all_quads = quad_cache.get(mosaic_id, [])
 
     try:
+        seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])  # Track already cached quads
         while quads_url:
             response = requests.get(quads_url, headers=headers, params=params)
             response.raise_for_status()
             data = response.json()
 
             for quad in data.get("items", []):
+                quad_id = quad["id"]
+                unique_id = (mosaic_id, quad_id)  # Combine mosaic_id and quad_id
                 download_url = quad["_links"].get("download")
-                if download_url and download_url not in all_quads:
-                    all_quads.append(download_url)
+
+                if unique_id not in seen_quads and download_url:
+                    # Append complete quad metadata for uniqueness
+                    all_quads.append({
+                        "mosaic_id": mosaic_id,  # Include mosaic_id explicitly
+                        "id": quad_id,
+                        "bbox": quad["bbox"],
+                        "percent_covered": quad["percent_covered"],
+                        "download_url": download_url
+                    })
+                    seen_quads.add(unique_id)
 
             quads_url = data["_links"].get("_next", None)
             params = None
 
-        quad_cache[mosaic_id] = all_quads
+        quad_cache[mosaic_id] = all_quads  # Cache for this mosaic
         save_cache()
 
-        logger.info(f"Total quads found for mosaic {mosaic_id}: {len(all_quads)}")
+        logger.info(f"Total unique quads found for mosaic {mosaic_id}: {len(all_quads)}")
         return all_quads
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch quads for mosaic {mosaic_id}: {e}")
@@ -122,12 +134,14 @@ def download_quad(download_url, output_dir):
         logger.error(f"Failed to download {quad_name}: {e}")
 
 # Parallel downloading with progress bar
-def download_all_quads(quads, output_dir):
+def download_all_quads(quads, mosaic_name, base_output_dir):
+    mosaic_output_dir = os.path.join(base_output_dir, mosaic_name)
+    os.makedirs(mosaic_output_dir, exist_ok=True)  # Ensure mosaic-specific folder exists
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = []
         with tqdm(total=len(quads)) as pbar:
             for quad_url in quads:
-                future = executor.submit(download_quad, quad_url, output_dir)
+                future = executor.submit(download_quad, quad_url, mosaic_output_dir)
                 future.add_done_callback(lambda _: pbar.update())
                 futures.append(future)
             for future in futures:
@@ -154,7 +168,7 @@ def download_nicfi_tiles():
         try:
             quads = fetch_quad_links(mosaic_id, bbox)
             logger.info(f"Found {len(quads)} quads for mosaic {mosaic_name}")
-            download_all_quads(quads, OUTPUT_DIR)
+            download_all_quads(quads, mosaic_name, OUTPUT_DIR)  # Pass mosaic name and base directory
         except Exception as e:
             logger.error(f"Failed to process mosaic {mosaic_name}: {e}")
 
