@@ -19,7 +19,6 @@ spec:
           export LOG_DIR=/sciclone/geograd/satellite_data/NICFI/LOGS
 
           # Run the NICFI Python script
-          python /sciclone/geograd/satellite_data/NICFI/NICFI_download/download.py
           sleep 999999
       volumeMounts:
         - name: nfs-mount

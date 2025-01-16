@@ -6,6 +6,10 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import logging
 import json
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 
 TEST_MODE = False
 TEST_MOSAIC_NAME = "planet_medres_normalized_analytic_2020-11_mosaic"
@@ -81,7 +85,9 @@ def fetch_quad_links(mosaic_id, bbox):
     all_quads = quad_cache.get(mosaic_id, [])
 
     try:
-        seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])  # Track already cached quads
+        # Track already cached quads for uniqueness
+        seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])
+        
         while quads_url:
             response = requests.get(quads_url, headers=headers, params=params)
             response.raise_for_status()
@@ -93,7 +99,7 @@ def fetch_quad_links(mosaic_id, bbox):
                 download_url = quad["_links"].get("download")
 
                 if unique_id not in seen_quads and download_url:
-                    # Append complete quad metadata for uniqueness
+                    # Append complete quad metadata to ensure uniqueness
                     all_quads.append({
                         "mosaic_id": mosaic_id,  # Include mosaic_id explicitly
                         "id": quad_id,
@@ -104,9 +110,9 @@ def fetch_quad_links(mosaic_id, bbox):
                     seen_quads.add(unique_id)
 
             quads_url = data["_links"].get("_next", None)
-            params = None
+            params = None  # Clear params for subsequent paginated requests
 
-        quad_cache[mosaic_id] = all_quads  # Cache for this mosaic
+        quad_cache[mosaic_id] = all_quads  # Cache results for this mosaic
         save_cache()
 
         logger.info(f"Total unique quads found for mosaic {mosaic_id}: {len(all_quads)}")
@@ -114,6 +120,7 @@ def fetch_quad_links(mosaic_id, bbox):
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to fetch quads for mosaic {mosaic_id}: {e}")
         raise
+
 
 # Function to download a single quad
 def download_quad(download_url, output_dir):
@@ -137,7 +144,7 @@ def download_quad(download_url, output_dir):
 def download_all_quads(quads, mosaic_name, base_output_dir):
     mosaic_output_dir = os.path.join(base_output_dir, mosaic_name)
     os.makedirs(mosaic_output_dir, exist_ok=True)  # Ensure mosaic-specific folder exists
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         futures = []
         with tqdm(total=len(quads)) as pbar:
             for quad_url in quads:
