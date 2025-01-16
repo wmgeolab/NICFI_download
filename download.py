@@ -54,27 +54,42 @@ def save_cache():
         json.dump(quad_cache, cache_file)
 
 # Function to fetch NICFI mosaics metadata
+import time
+
 def fetch_nicfi_mosaics():
     headers = {"Authorization": f"api-key {PLANET_API_KEY}"}
     mosaics = []
     next_page_url = NICFI_URL
+    retries = 5  # Number of retries for network issues
+    delay = 10   # Delay between retries (seconds)
 
     try:
         while next_page_url:
-            response = requests.get(next_page_url, headers=headers)
-            response.raise_for_status()
-            response_json = response.json()
+            for attempt in range(retries):
+                try:
+                    response = requests.get(next_page_url, headers=headers)
+                    response.raise_for_status()
+                    response_json = response.json()
 
-            mosaics += [mosaic for mosaic in response_json.get("mosaics", [])
-                        if mosaic["name"].startswith("planet_medres_normalized")]
+                    mosaics += [mosaic for mosaic in response_json.get("mosaics", [])
+                                if mosaic["name"].startswith("planet_medres_normalized")]
 
-            next_page_url = response_json["_links"].get("_next")
+                    next_page_url = response_json["_links"].get("_next")
+                    break  # Exit retry loop if successful
+                except requests.exceptions.RequestException as e:
+                    if attempt < retries - 1:
+                        logger.warning(f"Retrying request to {next_page_url} after error: {e}")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"Max retries reached for {next_page_url}: {e}")
+                        raise
 
         logger.info(f"Total mosaics found: {len(mosaics)}")
         return mosaics
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.error(f"Failed to fetch mosaics: {e}")
         raise
+
 
 # Function to fetch quad download links with caching
 def fetch_quad_links(mosaic_id, bbox):
