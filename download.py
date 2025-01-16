@@ -60,7 +60,7 @@ def fetch_nicfi_mosaics():
     headers = {"Authorization": f"api-key {PLANET_API_KEY}"}
     mosaics = []
     next_page_url = NICFI_URL
-    retries = 5  # Number of retries for network issues
+    retries = 10  # Number of retries for network issues
     delay = 10   # Delay between retries (seconds)
 
     try:
@@ -102,9 +102,9 @@ def fetch_quad_links(mosaic_id, bbox):
     all_quads = quad_cache.get(mosaic_id, [])
     seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])
 
-    max_retries = 5  # Maximum retries for transient errors
+    max_retries = 10  # Maximum retries for transient errors
     retry_delay = 2  # Initial delay between retries
-    retry_multiplier = 2  # Exponential backoff multiplier
+    retry_multiplier = 1  # Exponential backoff multiplier
 
     try:
         while quads_url:
@@ -152,7 +152,7 @@ def fetch_quad_links(mosaic_id, bbox):
 
 
 # Function to download a single quad
-def download_quad(quad, output_dir, max_retries=5, retry_delay=10):
+def download_quad(quad, output_dir, max_retries=10, retry_delay=10):
     download_url = quad.get("download_url")
     mosaic_name = quad.get("mosaic_id", "unknown_mosaic")
     quad_id = quad.get("id", "unknown_id")
