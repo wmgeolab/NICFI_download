@@ -152,8 +152,7 @@ def fetch_quad_links(mosaic_id, bbox):
 
 
 # Function to download a single quad
-def download_quad(quad, output_dir):
-    # Validate that the quad contains the required fields
+def download_quad(quad, output_dir, max_retries=5, retry_delay=10):
     download_url = quad.get("download_url")
     mosaic_name = quad.get("mosaic_id", "unknown_mosaic")
     quad_id = quad.get("id", "unknown_id")
@@ -162,7 +161,6 @@ def download_quad(quad, output_dir):
         logger.error(f"Invalid download URL for quad {quad_id} in mosaic {mosaic_name}: {download_url}")
         return
 
-    # Ensure unique file naming with mosaic ID and quad ID
     quad_name = f"{mosaic_name}_{quad_id}.tif"
     filepath = os.path.join(output_dir, quad_name)
 
@@ -170,16 +168,24 @@ def download_quad(quad, output_dir):
         logger.info(f"Already downloaded: {filepath}")
         return
 
-    # Attempt to download the quad
-    try:
-        response = requests.get(download_url, stream=True, timeout=30)  # Added timeout
-        response.raise_for_status()
-        with open(filepath, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024):
-                f.write(chunk)
-        logger.info(f"Downloaded: {filepath}")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to download quad {quad_id} from {download_url}: {e}")
+    attempts = 0
+    while attempts < max_retries:
+        try:
+            response = requests.get(download_url, stream=True, timeout=30)
+            response.raise_for_status()
+            with open(filepath, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024):
+                    f.write(chunk)
+            logger.info(f"Downloaded: {filepath}")
+            return  # Exit the function on successful download
+        except requests.exceptions.RequestException as e:
+            attempts += 1
+            logger.warning(f"Attempt {attempts}/{max_retries} failed to download quad {quad_id} from {download_url}: {e}")
+            if attempts < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Failed to download quad {quad_id} after {max_retries} attempts.")
 
 
 
