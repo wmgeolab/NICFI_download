@@ -9,6 +9,8 @@ import json
 import time
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import time
+from requests.exceptions import RequestException
 
 
 TEST_MODE = False
@@ -83,25 +85,38 @@ def fetch_quad_links(mosaic_id, bbox):
 
     params = {"bbox": bbox_str, "_page_size": 50}
     all_quads = quad_cache.get(mosaic_id, [])
+    seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])
+
+    max_retries = 5  # Maximum retries for transient errors
+    retry_delay = 2  # Initial delay between retries
+    retry_multiplier = 2  # Exponential backoff multiplier
 
     try:
-        # Track already cached quads for uniqueness
-        seen_quads = set([(mosaic_id, quad["id"]) for quad in all_quads])
-        
         while quads_url:
-            response = requests.get(quads_url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-
+            retries = 0
+            while retries < max_retries:
+                try:
+                    response = requests.get(quads_url, headers=headers, params=params, timeout=30)
+                    response.raise_for_status()
+                    data = response.json()
+                    break  # Exit retry loop if successful
+                except RequestException as e:
+                    retries += 1
+                    logger.warning(f"Request failed (attempt {retries}/{max_retries}) for URL: {quads_url} - {e}")
+                    time.sleep(retry_delay)
+                    retry_delay *= retry_multiplier  # Exponential backoff
+                    if retries == max_retries:
+                        logger.error(f"Skipping problematic page: {quads_url} after {max_retries} retries.")
+                        return all_quads  # Return quads collected so far
+            
             for quad in data.get("items", []):
                 quad_id = quad["id"]
-                unique_id = (mosaic_id, quad_id)  # Combine mosaic_id and quad_id
+                unique_id = (mosaic_id, quad_id)
                 download_url = quad["_links"].get("download")
 
                 if unique_id not in seen_quads and download_url:
-                    # Append complete quad metadata to ensure uniqueness
                     all_quads.append({
-                        "mosaic_id": mosaic_id,  # Include mosaic_id explicitly
+                        "mosaic_id": mosaic_id,
                         "id": quad_id,
                         "bbox": quad["bbox"],
                         "percent_covered": quad["percent_covered"],
@@ -110,14 +125,13 @@ def fetch_quad_links(mosaic_id, bbox):
                     seen_quads.add(unique_id)
 
             quads_url = data["_links"].get("_next", None)
-            params = None  # Clear params for subsequent paginated requests
+            params = None
 
-        quad_cache[mosaic_id] = all_quads  # Cache results for this mosaic
+        quad_cache[mosaic_id] = all_quads
         save_cache()
-
         logger.info(f"Total unique quads found for mosaic {mosaic_id}: {len(all_quads)}")
         return all_quads
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.error(f"Failed to fetch quads for mosaic {mosaic_id}: {e}")
         raise
 
