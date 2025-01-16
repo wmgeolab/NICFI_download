@@ -137,9 +137,18 @@ def fetch_quad_links(mosaic_id, bbox):
 
 
 # Function to download a single quad
-def download_quad(download_url, output_dir):
-    quad_name = download_url.split("/")[-2]
-    filepath = os.path.join(output_dir, f"{quad_name}.tif")
+def download_quad(quad, output_dir):
+    download_url = quad.get("download_url")
+    if not isinstance(download_url, str):  # Validate download_url is a string
+        logger.error(f"Invalid download URL: {download_url}")
+        return
+
+    # Append mosaic name to ensure unique filenames
+    mosaic_name = quad.get("mosaic_id", "unknown_mosaic")
+    quad_id = quad.get("id", "unknown_id")
+    quad_name = f"{mosaic_name}_{quad_id}.tif"  # Unique quad name with mosaic ID
+    filepath = os.path.join(output_dir, quad_name)
+
     if os.path.exists(filepath):
         logger.info(f"Already downloaded: {filepath}")
         return
@@ -152,7 +161,8 @@ def download_quad(download_url, output_dir):
                 f.write(chunk)
         logger.info(f"Downloaded: {filepath}")
     except Exception as e:
-        logger.error(f"Failed to download {quad_name}: {e}")
+        logger.error(f"Failed to download quad {quad_id} from {download_url}: {e}")
+
 
 # Parallel downloading with progress bar
 def download_all_quads(quads, mosaic_name, base_output_dir):
